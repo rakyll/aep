@@ -52,12 +52,12 @@ Restores the sandbox for `(session_id, task_id, seq_id)` (or boots at `seq_id = 
   "call_results": [
     {
       "task_id": "task_b",
-      "status": "OK",
-      "output": "<payload>"
+      "output": "<payload>",
+      "error": null
     },
     {
       "task_id": "task_c",
-      "status": "ERROR",
+      "output": null,
       "error": {
         "code": "STATUS_TIMEOUT",
         "message": "Task task_c failed liveness checks"
@@ -68,7 +68,7 @@ Restores the sandbox for `(session_id, task_id, seq_id)` (or boots at `seq_id = 
 ```
 
 - When invoked by a parent task (or external entrypoint), `input` carries the invocation arguments and `call_results` is empty.
-- When waking up after `YIELD_CALL`, `call_results` is populated in the exact order of the requested `calls`.
+- When waking up after `YIELD_CALL`, `call_results` is populated in the exact order of the requested `calls`. Each entry has exactly one of `output` or `error` set, mirroring the callee's `YIELD_DONE` (or a runtime-generated error such as `STATUS_TIMEOUT` or `TASK_BUSY`).
 
 ### 3.2 `STATUS` *(Runtime <-> Task)*
 
@@ -121,7 +121,7 @@ Halts the caller task, snapshots and suspends its sandbox, and invokes one or mo
 
 #### `YIELD_DONE` (Turn Complete)
 
-Completes the current invocation, snapshots and suspends the sandbox, and returns the result to the waiting caller. Exactly one of `output` or `error` is set; a non-null `error` is what the caller sees as `status: "ERROR"` in its `call_results`:
+Completes the current invocation, snapshots and suspends the sandbox, and returns the result to the waiting caller. Exactly one of `output` or `error` is set, and the pair is forwarded verbatim into the caller's `call_results`:
 
 ```json
 {
@@ -159,8 +159,8 @@ task_a                            Runtime                   task_b              
 [Restore & Unsuspend (task_a, 1)]    |
   |<-- RESUME(task_a, seq=1, --------|
   |     results=[                    |
-  |       {task_b: OK, out},         |
-  |       {task_c: ERROR, err}       |
+  |       {task_b: out},             |
+  |       {task_c: err}              |
   |     ])                           |
   |                                  |
   | (task_a handles task_c error)    |
@@ -288,8 +288,8 @@ curl -X POST $TASK_A/resume \
     "seq_id": 1,
     "input": null,
     "call_results": [
-      { "task_id": "task_b", "status": "OK", "output": { "files": 42 } },
-      { "task_id": "task_c", "status": "ERROR",
+      { "task_id": "task_b", "output": { "files": 42 }, "error": null },
+      { "task_id": "task_c", "output": null,
         "error": { "code": "STATUS_TIMEOUT", "message": "Task task_c failed liveness checks" } }
     ]
   }'
