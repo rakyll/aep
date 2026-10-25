@@ -27,8 +27,8 @@
 | Logical Task State | Physical Sandbox State | Description |
 | :--- | :--- | :--- |
 | **`RUNNING`** | **Active** (CPU/mem allocated, probed) | Task is actively executing a turn starting from `(session_id, seq_id)`. |
-| **`WAITING`** | **Suspended** (snapshotted / paused) | Task emitted `YIELD_CALL` advancing to `next_seq_id`. Sandbox is suspended until all child calls finish. |
-| **`IDLE` (Completed Turn)** | **Suspended** (snapshotted at `next_seq_id`) | Task emitted `YIELD_DONE`. Sandbox is suspended at `next_seq_id` and can be resumed by future calls to `session_id`. |
+| **`WAITING`** | **Suspended** (snapshotted / paused) | Task emitted `YIELD_CALL`. Runtime snapshots the sandbox at `seq_id + 1` and suspends it until all child calls finish. |
+| **`IDLE` (Completed Turn)** | **Suspended** (snapshotted at `seq_id + 1`) | Task emitted `YIELD_DONE`. Sandbox is suspended at `seq_id + 1` and can be resumed by future calls to `session_id`. |
 | **`UNHEALTHY`** | **Reclaimed / Rolled Back** | Liveness probe failed or timed out while `RUNNING`. Runtime kills the active sandbox and either retries from `(session_id, seq_id)` or returns an error to the caller. |
 
 ---
@@ -84,17 +84,16 @@ While a task is `RUNNING`, the runtime periodically probes the task for liveness
 
 ### 3.3 `YIELD` *(Task -> Runtime)*
 
-A running turn always ends with the task emitting a yield frame, which advances its checkpoint to `next_seq_id = seq_id + 1` and triggers an immediate sandbox snapshot & suspend.
+A running turn always ends with the task emitting a yield frame, which triggers an immediate sandbox snapshot & suspend. The task does not send a sequence number: the runtime owns `seq_id` and records the new checkpoint as `seq_id + 1`, where `seq_id` is the value it delivered in the preceding `RESUME`.
 
 #### `YIELD_CALL` (Fan-Out / `CallMany`)
 
-Halts the caller task, snapshots and suspends its sandbox at `next_seq_id`, and invokes one or more target sessions in parallel:
+Halts the caller task, snapshots and suspends its sandbox, and invokes one or more target sessions in parallel:
 
 ```json
 {
   "type": "YIELD_CALL",
   "session_id": "sess_a",
-  "next_seq_id": 1,
   "calls": [
     { "session_id": "sess_b", "task": "worker_type_1", "input": "<args_1>" },
     { "session_id": "sess_c", "task": "worker_type_2", "input": "<args_2>" }
@@ -107,13 +106,12 @@ Halts the caller task, snapshots and suspends its sandbox at `next_seq_id`, and 
 
 #### `YIELD_DONE` (Turn Complete)
 
-Completes the current invocation, snapshots and suspends the sandbox at `next_seq_id`, and returns the result (or unhandled task error) to the waiting caller:
+Completes the current invocation, snapshots and suspends the sandbox, and returns the result (or unhandled task error) to the waiting caller:
 
 ```json
 {
   "type": "YIELD_DONE",
   "session_id": "sess_a",
-  "next_seq_id": 2,
   "status": "OK",
   "output": "<final_result>",
   "error": null
@@ -130,8 +128,8 @@ Task A ("sess_a")                 Runtime                   Task B ("sess_b")   
   |<-- RESUME(sess_a, seq=0) --------|
   |<-- PROBE() --------------------->|
   |                                  |
-  |--- YIELD_CALL(next_seq=1, ------>|
-  |     calls=[sess_b, sess_c])      |
+  |--- YIELD_CALL(calls=[sess_b, -->|
+  |     sess_c])                     |
 [Snapshot & Suspend (sess_a, 1)]     |
                                      |--- RESUME(sess_b, latest_seq, in) ->|
                                      |--- RESUME(sess_c, latest_seq, in) ----------------------->|
@@ -149,7 +147,7 @@ Task A ("sess_a")                 Runtime                   Task B ("sess_b")   
   |     ])                           |
   |                                  |
   | (Task A handles sess_c error)    |
-  |--- YIELD_DONE(next_seq=2, OK) -->|
+  |--- YIELD_DONE(OK) -------------->|
 [Snapshot & Suspend (sess_a, 2)]
 ```
 
